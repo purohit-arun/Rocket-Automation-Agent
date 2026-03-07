@@ -1,0 +1,32 @@
+# Rocket Automation Agent — Task Tracker
+
+## Planning
+- [x] Analyze requirements from PDF
+- [x] Create implementation plan
+- [ ] Get user approval on plan
+
+## Project Setup
+- [ ] Create `package.json`, `tsconfig.json`, `playwright.config.ts`
+- [ ] Create `.env.example`
+- [ ] Create project directory structure
+
+## Core Implementation
+- [ ] `src/config/config.ts` — Environment config loader
+- [ ] `src/utils/logger.ts` — Structured logging
+- [ ] `src/utils/retry.ts` — Retry logic utility
+- [ ] `src/services/chatgpt.service.ts` — OpenAI integration
+- [ ] `src/services/googleSheets.service.ts` — Google Sheets API
+- [ ] `src/playwright/browserManager.ts` — Browser lifecycle
+- [ ] `src/playwright/rocketPage.ts` — Rocket.new POM
+- [ ] `src/agents/appDefinition.agent.ts` — App definition generator
+- [ ] `src/agents/rocketBuilder.agent.ts` — Automated app builder
+- [ ] `src/agents/analysis.agent.ts` — App analysis agent
+- [ ] `src/runner/automationRunner.ts` — Orchestrator
+- [ ] `tests/runAutomation.spec.ts` — Playwright test entrypoint
+
+## Documentation
+- [ ] `README.md` — Full setup and run instructions
+
+## Verification
+- [ ] TypeScript compilation check
+- [ ] Verify project structure completeness
