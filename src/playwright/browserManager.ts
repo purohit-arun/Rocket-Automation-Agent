@@ -50,12 +50,8 @@ export class BrowserManager {
             await this.launch();
         }
 
-        // Dynamically detect screen resolution
-        const screenSize = await this.detectScreenSize();
-        log.info(`Detected screen size: ${screenSize.width}x${screenSize.height}`);
-
         const contextOptions: Record<string, unknown> = {
-            viewport: { width: screenSize.width, height: screenSize.height },
+            viewport: null,
             userAgent:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             ignoreHTTPSErrors: true,
@@ -95,29 +91,7 @@ export class BrowserManager {
         return this.context;
     }
 
-    /**
-     * Detect the actual screen resolution by opening a temporary probe page.
-     */
-    private async detectScreenSize(): Promise<{ width: number; height: number }> {
-        try {
-            const probeContext = await this.browser!.newContext();
-            const probePage = await probeContext.newPage();
-            const size = await probePage.evaluate(() => ({
-                width: window.screen.availWidth || window.innerWidth,
-                height: window.screen.availHeight || window.innerHeight,
-            }));
-            await probePage.close();
-            await probeContext.close();
-            // Leave a small margin for OS taskbar/chrome
-            return {
-                width: Math.max(size.width - 10, 800),
-                height: Math.max(size.height - 80, 600),
-            };
-        } catch (error) {
-            log.warn("Could not detect screen size, using fallback 1280x720");
-            return { width: 1280, height: 720 };
-        }
-    }
+    // detectScreenSize removed because viewport is set to null to utilize full window size natively
 
     /**
      * Save the current browser context's auth state to file.

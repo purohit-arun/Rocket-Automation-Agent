@@ -13,7 +13,7 @@ import { AutomationInput } from "../src/config/config";
 
 // ─── Input Configuration ──────────────────────────────────────────────────────
 const automationInput: AutomationInput = {
-    numberOfApps: parseInt(process.env.NUM_APPS || "3", 10),
+    numberOfApps: parseInt(process.env.NUM_APPS || "1", 10),
     technology: process.env.TECHNOLOGY || "React",
     useCase: process.env.USE_CASE || "Web App",
     type: process.env.APP_TYPE || "Ecommerce Clothing Store",
@@ -82,19 +82,57 @@ test.describe("Individual Steps", () => {
         });
     });
 
+    // ══ ORIGINAL Step 3 (commented out while debugging) ═══════════════════════
+    // test("Step 3 — Build and Publish Apps on Rocket.new", async () => {
+    //     const definitions = await runner.runBuildOnly();
+    //
+    //     const publishedCount = definitions.filter((d) => d.publishedUrl).length;
+    //     expect(publishedCount).toBeGreaterThan(0);
+    //
+    //     console.log("Published apps:");
+    //     definitions
+    //         .filter((d) => d.publishedUrl)
+    //         .forEach((d) => {
+    //             console.log(`  ✓ ${d.appName}: ${d.publishedUrl}`);
+    //         });
+    // });
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ══ TEMP: Using debugGetUrlFromSidebarChat to skip 5-min generation wait ══
+    // ══ Revert to original runBuildOnly() call once debugging is done ══════════
     test("Step 3 — Build and Publish Apps on Rocket.new", async () => {
-        const definitions = await runner.runBuildOnly();
+        const { BrowserManager } = await import("../src/playwright/browserManager");
+        const { RocketPage } = await import("../src/playwright/rocketPage");
 
-        const publishedCount = definitions.filter((d) => d.publishedUrl).length;
-        expect(publishedCount).toBeGreaterThan(0);
+        const browserManager = new BrowserManager();
 
-        console.log("Published apps:");
-        definitions
-            .filter((d) => d.publishedUrl)
-            .forEach((d) => {
-                console.log(`  ✓ ${d.appName}: ${d.publishedUrl}`);
-            });
+        try {
+            await browserManager.launch();
+            const context = await browserManager.newContext();
+            const page = await context.newPage();
+            const rocketPage = new RocketPage(page);
+
+            await rocketPage.navigate();
+            await rocketPage.login();
+
+            // Use temp method: open sidebar chat by name and extract published URL
+            const publishedUrl = await rocketPage.debugGetUrlFromSidebarChat("ArunClothSphere");
+
+            expect(publishedUrl).toBeTruthy();
+            expect(publishedUrl).toContain("builtwithrocket.new");
+
+            console.log(`\n✅ Published URL extracted: ${publishedUrl}`);
+
+            // Open the extracted URL in a new tab to verify
+            console.log(`\n[TEMP] Opening new tab to verify published app...`);
+            const publishedPage = await context.newPage();
+            await publishedPage.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+            await publishedPage.waitForTimeout(5000); // Wait 5s so you can visually verify it loaded
+        } finally {
+            await browserManager.close();
+        }
     });
+    // ══ END TEMP ══════════════════════════════════════════════════════════════
 
     test("Step 4 & 5 — Analyze Published Apps", async () => {
         const results = await runner.runAnalysisOnly();

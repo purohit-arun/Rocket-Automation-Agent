@@ -39,19 +39,18 @@ export class RocketPage {
         );
     }
 
-    // Publish
-    private get publishButton(): Locator {
+    // Preview button — appears enabled when app generation is complete
+    private get previewButton(): Locator {
         return this.page.locator(
-            'button:has-text("Publish"), button:has-text("Deploy"), ' +
-            'button:has-text("Share"), a:has-text("Publish")'
+            '[data-tooltip-id="tooltip-Preview"] button, ' +
+            'button:has-text("Preview")'
         );
     }
-    private get publishedUrlElement(): Locator {
+
+    // Launch button — the publish/deploy action on Rocket.new
+    private get launchButton(): Locator {
         return this.page.locator(
-            'input[readonly][value*="http"], a[href*="rocket"][target="_blank"], ' +
-            '[class*="url"] input, [class*="link"] input, ' +
-            'input[value*=".vercel.app"], input[value*=".netlify.app"], ' +
-            'a[href*="vercel"], a[href*="netlify"]'
+            'button:has-text("Launch")'
         );
     }
 
@@ -172,6 +171,15 @@ export class RocketPage {
                 await promptField.fill(prompt);
                 log.debug(`Prompt entered for "${definition.appName}" (${prompt.length} chars)`);
 
+                // Dismiss cookie banner if it appears
+                const cookieAcceptBtn = this.page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
+                if (await cookieAcceptBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                    await cookieAcceptBtn.click();
+                    log.debug("Dismissed cookie consent banner ('Accept All')");
+                    // Wait briefly for the banner to animate away
+                    await sleep(1000);
+                }
+
                 // Submit / Generate
                 await this.generateButton.first().waitFor({ state: "visible", timeout: 10_000 });
                 await this.generateButton.first().click();
@@ -183,168 +191,202 @@ export class RocketPage {
                 label: `Create App: ${definition.appName}`,
             }
         );
+
+        // Wait for the intermediate "Build my..." button to appear after analysis
+        // This is a required wizard step on Rocket.new before final generation.
+        log.info("Waiting for initial analysis to complete and 'Build my...' button to appear...");
+        try {
+            const buildMyBtn = this.page.locator('button', { hasText: /build my/i }).first();
+            await buildMyBtn.waitFor({ state: "visible", timeout: 120_000 });
+            await sleep(2000); // Small pause to let the UI fully settle before clicking
+            await buildMyBtn.click();
+            log.info("Clicked 'Build my...' button to start actual generation");
+        } catch {
+            log.warn("Did not find 'Build my...' button within 2 minutes. Assuming generation started automatically.");
+        }
     }
 
     /**
      * Wait for the application generation to complete.
-     * Uses smart polling instead of static waits.
+     *
+     * Detection strategy (based on real Rocket.new DOM):
+     *  1. Wait for the "Preview" button to appear and become enabled (aria-disabled="false")
+     *  2. Wait for the "Launch" button to appear and become enabled (aria-disabled="false")
+     *  Both buttons only appear in enabled form AFTER generation completes.
      */
     async waitForGeneration(timeoutMs: number = 300_000): Promise<void> {
         log.info("Waiting for app generation to complete...");
         const startTime = Date.now();
 
-        await retryAsync(
-            async () => {
-                // Strategy 1: Wait for spinner/loading to disappear
-                try {
-                    await this.generationSpinner.first().waitFor({
-                        state: "visible",
-                        timeout: 10_000,
-                    });
-                    log.debug("Generation spinner detected — waiting for completion");
+        // Phase 1: Optionally wait for loading/spinner to appear then disappear
+        try {
+            const spinner = this.generationSpinner.first();
+            await spinner.waitFor({ state: "visible", timeout: 15_000 });
+            log.debug("Generation activity detected — waiting for it to finish...");
+            await spinner.waitFor({ state: "hidden", timeout: timeoutMs });
+            log.debug("Generation activity ended");
+        } catch {
+            log.debug("No spinner detected — checking for completion buttons directly");
+        }
 
-                    await this.generationSpinner.first().waitFor({
-                        state: "hidden",
-                        timeout: timeoutMs,
-                    });
-                    log.info("Generation spinner disappeared");
-                } catch {
-                    log.debug("No spinner detected — using fallback strategy");
+        // Phase 2: Wait for PREVIEW button to be visible and enabled
+        log.info("Waiting for Preview button to become enabled...");
+        await this.page.waitForFunction(
+            () => {
+                // Look for the Preview button using tooltip or text
+                const tooltipBtn = document.querySelector('[data-tooltip-id="tooltip-Preview"] button');
+                if (tooltipBtn) {
+                    return tooltipBtn.getAttribute('aria-disabled') !== 'true';
                 }
-
-                // Strategy 2: Wait for publish/deploy button to appear (signals completion)
-                await this.page.waitForFunction(
-                    () => {
-                        const buttons = document.querySelectorAll("button, a");
-                        return Array.from(buttons).some((btn) => {
-                            const text = btn.textContent?.toLowerCase() || "";
-                            return (
-                                text.includes("publish") ||
-                                text.includes("deploy") ||
-                                text.includes("share") ||
-                                text.includes("preview")
-                            );
-                        });
-                    },
-                    { timeout: timeoutMs - (Date.now() - startTime) }
-                );
-
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-                log.info(`App generation completed in ${elapsed}s`);
+                // Fallback: find by text
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    if (btn.textContent?.trim().toLowerCase() === 'preview') {
+                        return btn.getAttribute('aria-disabled') !== 'true';
+                    }
+                }
+                return false;
             },
-            {
-                maxRetries: 1,
-                delayMs: 5000,
-                label: "Wait for Generation",
-            }
+            { timeout: timeoutMs }
         );
+        log.info("✓ Preview button is enabled");
+
+        // Phase 3: Wait for LAUNCH button to be visible and enabled
+        log.info("Waiting for Launch button to become enabled...");
+        await this.page.waitForFunction(
+            () => {
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    if (btn.textContent?.trim().toLowerCase() === 'launch') {
+                        return btn.getAttribute('aria-disabled') !== 'true';
+                    }
+                }
+                return false;
+            },
+            { timeout: timeoutMs }
+        );
+        log.info("✓ Launch button is enabled");
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        log.info(`✅ App generation completed in ${elapsed}s`);
     }
 
     /**
-     * Publish the generated application.
+     * Launch (publish) the generated application.
+     * Clicks the "Launch" button on Rocket.new.
      */
     async publishApp(): Promise<void> {
-        log.info("Publishing application...");
+        log.info("Launching (publishing) application...");
 
         await retryAsync(
             async () => {
-                await this.publishButton.first().waitFor({
+                // Step 1: Wait for the main Launch button to be visible and enabled
+                await this.launchButton.first().waitFor({
                     state: "visible",
                     timeout: 30_000,
                 });
-                await this.publishButton.first().click();
-                log.debug("Publish button clicked");
 
-                // Wait for publishing to complete
-                await sleep(3000);
-
-                // Confirm publish if there's a confirmation dialog
-                const confirmButton = this.page.locator(
-                    'button:has-text("Confirm"), button:has-text("Yes"), button:has-text("OK")'
-                );
-                if (await confirmButton.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
-                    await confirmButton.first().click();
-                    log.debug("Publish confirmed");
+                // Verify it's not disabled
+                const isDisabled = await this.launchButton.first().getAttribute('aria-disabled');
+                if (isDisabled === 'true') {
+                    throw new Error("Launch button is still disabled — generation may not be complete");
                 }
 
-                log.info("Application published");
+                await sleep(2000); // Let UI settle before clicking
+                await this.launchButton.first().click();
+                log.info("Main Launch button clicked");
+
+                // Step 2: A popup/dialog opens with another "Launch" button — click it
+                await sleep(2000); // Wait for popup to appear
+                const popupLaunchBtn = this.page.locator('button:has-text("Launch")').last();
+                await popupLaunchBtn.waitFor({ state: "visible", timeout: 15_000 });
+                await sleep(1000); // Brief pause for popup to fully render
+                await popupLaunchBtn.click();
+                log.info("Popup Launch button clicked — deployment started");
+
+                log.info("✅ Launch initiated, waiting for deployment to complete...");
             },
             {
                 maxRetries: 2,
                 delayMs: 3000,
-                label: "Publish App",
+                label: "Launch App",
             }
         );
     }
 
     /**
      * Extract the published URL after publishing.
+     *
+     * Waits for the "Live" badge to appear in the dialog (indicating deployment is complete),
+     * then extracts the URL from the anchor tag with aria-label containing "Visit published site".
      */
     async getPublishedUrl(): Promise<string> {
-        log.info("Extracting published URL...");
+        log.info("Waiting for deployment to complete and extracting published URL...");
 
         return await retryAsync(
             async () => {
-                // Wait for URL to appear
-                await sleep(3000);
+                // Step 3: Wait for the "Live" badge to appear (deployment complete)
+                const liveBadge = this.page.getByText("Live");
+                await liveBadge.waitFor({ state: "visible", timeout: 120_000 });
+                log.info("✓ 'Live' badge detected — deployment is complete");
 
-                // Strategy 1: Look for input fields with URL values
-                const urlInput = this.publishedUrlElement.first();
-                if (await urlInput.isVisible({ timeout: 10_000 }).catch(() => false)) {
-                    const tagName = await urlInput.evaluate((el) => el.tagName.toLowerCase());
+                await sleep(2000); // Let the dialog fully update with the URL
 
-                    if (tagName === "input") {
-                        const url = await urlInput.inputValue();
-                        if (url && url.startsWith("http")) {
-                            log.info(`Published URL found (input): ${url}`);
-                            return url;
-                        }
-                    } else if (tagName === "a") {
-                        const url = await urlInput.getAttribute("href");
-                        if (url && url.startsWith("http")) {
-                            log.info(`Published URL found (link): ${url}`);
-                            return url;
-                        }
+                // Step 4: Extract the published URL from the anchor tag in the dialog
+                // The anchor has aria-label like: "Visit published site: https://...builtwithrocket.new (opens in new tab)"
+                const publishedLink = this.page.locator('a[aria-label*="Visit published site"]');
+                if (await publishedLink.isVisible({ timeout: 10_000 }).catch(() => false)) {
+                    const url = await publishedLink.getAttribute('href');
+                    if (url && url.startsWith('http')) {
+                        // Clean up query params like ?rk_owner=true
+                        const cleanUrl = url.split('?')[0];
+                        log.info(`✅ Published URL extracted: ${cleanUrl}`);
+                        return cleanUrl;
                     }
                 }
 
-                // Strategy 2: Search all visible text for URLs
-                const pageContent = await this.page.content();
-                const urlMatch = pageContent.match(
-                    /https?:\/\/[^\s"'<>]+(?:\.vercel\.app|\.netlify\.app|\.rocket\.new)[^\s"'<>]*/
-                );
-                if (urlMatch) {
-                    log.info(`Published URL found (regex): ${urlMatch[0]}`);
-                    return urlMatch[0];
+                // Fallback: try to extract from the <p> tag text inside the anchor
+                const urlText = this.page.locator('a[aria-label*="Visit published site"] p');
+                if (await urlText.isVisible({ timeout: 5_000 }).catch(() => false)) {
+                    const text = await urlText.textContent();
+                    if (text && text.startsWith('http')) {
+                        log.info(`✅ Published URL extracted (from text): ${text.trim()}`);
+                        return text.trim();
+                    }
                 }
 
-                // Strategy 3: Check clipboard
+                // Fallback: Click the "Copy URL" button and read from clipboard
                 try {
-                    const copyButton = this.page.locator(
-                        'button:has-text("Copy"), button[aria-label*="copy" i]'
-                    );
-                    if (await copyButton.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
-                        await copyButton.first().click();
+                    const copyUrlBtn = this.page.locator('button[title="Copy URL"]');
+                    if (await copyUrlBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
+                        await copyUrlBtn.click();
+                        log.debug("Clicked 'Copy URL' button");
+                        await sleep(1000); // Wait for clipboard to be populated
                         const clipboardUrl = await this.page.evaluate(() =>
                             navigator.clipboard.readText()
                         );
-                        if (clipboardUrl && clipboardUrl.startsWith("http")) {
-                            log.info(`Published URL found (clipboard): ${clipboardUrl}`);
-                            return clipboardUrl;
+                        if (clipboardUrl && clipboardUrl.startsWith('http')) {
+                            const cleanUrl = clipboardUrl.trim().split('?')[0];
+                            log.info(`✅ Published URL extracted (clipboard): ${cleanUrl}`);
+                            return cleanUrl;
                         }
                     }
                 } catch {
-                    log.debug("Clipboard read failed");
+                    log.debug("Clipboard read failed — trying next strategy");
                 }
 
-                // Strategy 4: Get from current page URL
-                const currentUrl = this.page.url();
-                if (currentUrl && !currentUrl.includes("rocket.new")) {
-                    log.info(`Published URL (current page): ${currentUrl}`);
-                    return currentUrl;
+                // Last resort: regex search in page HTML for builtwithrocket.new URLs
+                const pageContent = await this.page.content();
+                const urlMatch = pageContent.match(
+                    /https?:\/\/[^\s"'<>]+\.public\.builtwithrocket\.new/
+                );
+                if (urlMatch) {
+                    const cleanUrl = urlMatch[0].split('?')[0];
+                    log.info(`✅ Published URL extracted (regex): ${cleanUrl}`);
+                    return cleanUrl;
                 }
 
-                throw new Error("Could not extract published URL");
+                throw new Error("Could not extract published URL from the deployment dialog");
             },
             {
                 maxRetries: 3,
@@ -383,4 +425,109 @@ export class RocketPage {
             `Requirements: ${definition.functionalRequirements.join("; ")}`,
         ].join("\n");
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ══ TEMP: Remove this entire block once script debugging is complete ══════
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * [TEMP / DEBUG ONLY]
+     * Opens a previously generated app from the sidebar by name, clicks Launch,
+     * waits for "Live" badge, and extracts the published URL.
+     *
+     * Use this to test the publish + URL extraction flow without
+     * waiting 5+ mins for a new app to generate each time.
+     *
+     * @param chatName - The name of the chat/app to click in the sidebar (e.g. "ArunClothSphere")
+     * @returns The published URL string
+     */
+    async debugGetUrlFromSidebarChat(chatName: string): Promise<string> {
+        log.info(`[TEMP] Opening sidebar chat "${chatName}" to test publish flow...`);
+
+        // 2. Click the chat item by name from the sidebar
+        const chatItem = this.page.locator(`p.truncate:has-text("${chatName}")`);
+        await chatItem.waitFor({ state: "visible", timeout: 10_000 });
+        await chatItem.click();
+        log.info(`[TEMP] Clicked chat: "${chatName}"`);
+        await sleep(3000); // Wait for the chat/app to fully load
+
+        // 3. Wait for Launch button to be visible and enabled
+        log.info("[TEMP] Waiting for Launch button...");
+        await this.launchButton.first().waitFor({ state: "visible", timeout: 30_000 });
+
+        const isDisabled = await this.launchButton.first().getAttribute('aria-disabled');
+        if (isDisabled === 'true') {
+            throw new Error("[TEMP] Launch button is disabled — app may still be generating");
+        }
+
+        // 4. Click the Launch button — this opens a dropdown menu showing the published URL
+        await sleep(1000);
+        await this.launchButton.first().click();
+        log.info("[TEMP] Launch button clicked — dropdown should now be open");
+
+        // 5. Wait for the dropdown menu to appear (role="menu" with the URL inside)
+        const dropdownMenu = this.page.locator('[role="menu"][data-state="open"]');
+        await dropdownMenu.waitFor({ state: "visible", timeout: 15_000 });
+        log.info("[TEMP] ✓ Launch dropdown is open");
+
+        await sleep(1000);
+
+        // 6. Extract the published URL from the anchor tag inside the dropdown
+        // <a href="https://...builtwithrocket.new?rk_owner=true" aria-label="Visit published site: ...">
+        const publishedLink = dropdownMenu.locator('a[aria-label*="Visit published site"]');
+        if (await publishedLink.isVisible({ timeout: 8_000 }).catch(() => false)) {
+            const url = await publishedLink.getAttribute('href');
+            if (url && url.startsWith('http')) {
+                const cleanUrl = url.split('?')[0];
+                log.info(`[TEMP] ✅ Published URL (href): ${cleanUrl}`);
+                return cleanUrl;
+            }
+        }
+
+        // Fallback A: read the <p> text inside the anchor
+        const urlText = dropdownMenu.locator('a[aria-label*="Visit published site"] p');
+        if (await urlText.isVisible({ timeout: 5_000 }).catch(() => false)) {
+            const text = await urlText.textContent();
+            if (text && text.trim().startsWith('http')) {
+                log.info(`[TEMP] ✅ Published URL (p text): ${text.trim()}`);
+                return text.trim();
+            }
+        }
+
+        // Fallback B: Copy URL button → clipboard
+        try {
+            const copyUrlBtn = dropdownMenu.locator('button[title="Copy URL"]');
+            if (await copyUrlBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
+                await copyUrlBtn.click();
+                await sleep(1000);
+                const clipboardUrl = await this.page.evaluate(() =>
+                    navigator.clipboard.readText()
+                );
+                if (clipboardUrl && clipboardUrl.startsWith('http')) {
+                    const cleanUrl = clipboardUrl.trim().split('?')[0];
+                    log.info(`[TEMP] ✅ Published URL (clipboard): ${cleanUrl}`);
+                    return cleanUrl;
+                }
+            }
+        } catch {
+            log.debug("[TEMP] Clipboard read failed");
+        }
+
+        // Fallback C: regex on full page HTML
+        const pageContent = await this.page.content();
+        const urlMatch = pageContent.match(
+            /https?:\/\/[^\s"'<>]+\.public\.builtwithrocket\.new/
+        );
+        if (urlMatch) {
+            const cleanUrl = urlMatch[0].split('?')[0];
+            log.info(`[TEMP] ✅ Published URL (regex): ${cleanUrl}`);
+            return cleanUrl;
+        }
+
+        throw new Error("[TEMP] Could not extract published URL from sidebar chat");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ══ END TEMP BLOCK ═══════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════════
 }

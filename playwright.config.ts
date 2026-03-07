@@ -17,12 +17,12 @@ export default defineConfig({
     use: {
         baseURL: process.env.BASE_URL || "https://rocket.new",
         headless: false,
-        viewport: { width: 1280, height: 720 },
+        viewport: null,
         launchOptions: {
             args: ["--start-maximized"],
         },
-        actionTimeout: 30_000,
-        navigationTimeout: 60_000,
+        actionTimeout: 0, // 0 means no timeout (wait for test timeout instead)
+        navigationTimeout: 0,
         screenshot: "on",
         video: "retain-on-failure",
         trace: "retain-on-failure",
