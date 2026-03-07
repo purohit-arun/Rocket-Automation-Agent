@@ -16,6 +16,11 @@ export class RocketPage {
     readonly page: Page;
     private readonly baseUrl: string;
 
+    constructor(page: Page) {
+        this.page = page;
+        this.baseUrl = config.baseUrl;
+    }
+
     // ─── Locators ───────────────────────────────────────────────────────    // App creation
     private get promptInput(): Locator {
         return this.page.locator(
@@ -54,10 +59,6 @@ export class RocketPage {
         );
     }
 
-    constructor(page: Page) {
-        this.page = page;
-        this.baseUrl = config.baseUrl;
-    }
 
     /**
      * Navigate to the Rocket.new homepage.
@@ -280,31 +281,30 @@ export class RocketPage {
 
         await retryAsync(
             async () => {
-                // Step 1: Wait for the main Launch button to be visible and enabled
-                await this.launchButton.first().waitFor({
-                    state: "visible",
-                    timeout: 30_000,
-                });
-
-                // Verify it's not disabled
+                // Step 1: Wait for the header Launch button to be visible and enabled
+                await this.launchButton.first().waitFor({ state: "visible", timeout: 30_000 });
                 const isDisabled = await this.launchButton.first().getAttribute('aria-disabled');
                 if (isDisabled === 'true') {
                     throw new Error("Launch button is still disabled — generation may not be complete");
                 }
 
-                await sleep(2000); // Let UI settle before clicking
+                // Step 2: Click the header Launch button to open the dropdown
+                await sleep(1000);
                 await this.launchButton.first().click();
-                log.info("Main Launch button clicked");
+                log.info("Header Launch button clicked — waiting for dropdown...");
 
-                // Step 2: A popup/dialog opens with another "Launch" button — click it
-                await sleep(2000); // Wait for popup to appear
-                const popupLaunchBtn = this.page.locator('button:has-text("Launch")').last();
-                await popupLaunchBtn.waitFor({ state: "visible", timeout: 15_000 });
-                await sleep(1000); // Brief pause for popup to fully render
-                await popupLaunchBtn.click();
-                log.info("Popup Launch button clicked — deployment started");
+                // Step 3: Wait for the dropdown to open
+                const dropdownMenu = this.page.locator('[role="menu"][data-state="open"]');
+                await dropdownMenu.waitFor({ state: "visible", timeout: 15_000 });
+                log.info("Dropdown open — clicking inner Launch button to start deployment...");
 
-                log.info("✅ Launch initiated, waiting for deployment to complete...");
+                // Step 4: Click the "Launch" button INSIDE the dropdown
+                // This button triggers the actual Netlify deployment
+                const innerLaunchBtn = dropdownMenu.locator('button').filter({ hasText: /^Launch$/ });
+                await innerLaunchBtn.waitFor({ state: "visible", timeout: 10_000 });
+                await sleep(500);
+                await innerLaunchBtn.click();
+                log.info("✅ Inner Launch button clicked — deployment started");
             },
             {
                 maxRetries: 2,
@@ -317,51 +317,47 @@ export class RocketPage {
     /**
      * Extract the published URL after publishing.
      *
-     * Waits for the "Live" badge to appear in the dialog (indicating deployment is complete),
-     * then extracts the URL from the anchor tag with aria-label containing "Visit published site".
+     * After publishApp() clicks the inner Launch button, the dropdown updates
+     * to show the live URL. This method waits for that URL anchor to appear
+     * and extracts it.
      */
     async getPublishedUrl(): Promise<string> {
         log.info("Waiting for deployment to complete and extracting published URL...");
 
         return await retryAsync(
             async () => {
-                // Step 3: Wait for the "Live" badge to appear (deployment complete)
-                const liveBadge = this.page.getByText("Live");
-                await liveBadge.waitFor({ state: "visible", timeout: 120_000 });
-                log.info("✓ 'Live' badge detected — deployment is complete");
+                // Dropdown stays open after deployment — wait for it
+                const dropdownMenu = this.page.locator('[role="menu"][data-state="open"]');
+                await dropdownMenu.waitFor({ state: "visible", timeout: 120_000 });
 
-                await sleep(2000); // Let the dialog fully update with the URL
-
-                // Step 4: Extract the published URL from the anchor tag in the dialog
-                // The anchor has aria-label like: "Visit published site: https://...builtwithrocket.new (opens in new tab)"
-                const publishedLink = this.page.locator('a[aria-label*="Visit published site"]');
-                if (await publishedLink.isVisible({ timeout: 10_000 }).catch(() => false)) {
-                    const url = await publishedLink.getAttribute('href');
-                    if (url && url.startsWith('http')) {
-                        // Clean up query params like ?rk_owner=true
-                        const cleanUrl = url.split('?')[0];
-                        log.info(`✅ Published URL extracted: ${cleanUrl}`);
-                        return cleanUrl;
-                    }
+                // Strategy 1: Wait for the URL anchor to appear (deployment complete indicator)
+                // <a href="https://...builtwithrocket.new?rk_owner=true" aria-label="Visit published site: ...">
+                const publishedLink = dropdownMenu.locator('a[aria-label*="Visit published site"]');
+                await publishedLink.waitFor({ state: "visible", timeout: 120_000 });
+                const url = await publishedLink.getAttribute('href');
+                if (url && url.startsWith('http')) {
+                    const cleanUrl = url.split('?')[0];
+                    log.info(`✅ Published URL extracted (href): ${cleanUrl}`);
+                    return cleanUrl;
                 }
 
-                // Fallback: try to extract from the <p> tag text inside the anchor
-                const urlText = this.page.locator('a[aria-label*="Visit published site"] p');
+                // Strategy 2: <p> text inside the anchor
+                const urlText = dropdownMenu.locator('a[aria-label*="Visit published site"] p');
                 if (await urlText.isVisible({ timeout: 5_000 }).catch(() => false)) {
                     const text = await urlText.textContent();
-                    if (text && text.startsWith('http')) {
-                        log.info(`✅ Published URL extracted (from text): ${text.trim()}`);
+                    if (text && text.trim().startsWith('http')) {
+                        log.info(`✅ Published URL extracted (p text): ${text.trim()}`);
                         return text.trim();
                     }
                 }
 
-                // Fallback: Click the "Copy URL" button and read from clipboard
+                // Strategy 3: Copy URL button → clipboard
                 try {
-                    const copyUrlBtn = this.page.locator('button[title="Copy URL"]');
+                    const copyUrlBtn = dropdownMenu.locator('button[title="Copy URL"]');
                     if (await copyUrlBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
                         await copyUrlBtn.click();
                         log.debug("Clicked 'Copy URL' button");
-                        await sleep(1000); // Wait for clipboard to be populated
+                        await sleep(1000);
                         const clipboardUrl = await this.page.evaluate(() =>
                             navigator.clipboard.readText()
                         );
@@ -375,7 +371,7 @@ export class RocketPage {
                     log.debug("Clipboard read failed — trying next strategy");
                 }
 
-                // Last resort: regex search in page HTML for builtwithrocket.new URLs
+                // Strategy 4: regex on full page HTML
                 const pageContent = await this.page.content();
                 const urlMatch = pageContent.match(
                     /https?:\/\/[^\s"'<>]+\.public\.builtwithrocket\.new/
@@ -386,7 +382,7 @@ export class RocketPage {
                     return cleanUrl;
                 }
 
-                throw new Error("Could not extract published URL from the deployment dialog");
+                throw new Error("Could not extract published URL from the launch dropdown");
             },
             {
                 maxRetries: 3,
