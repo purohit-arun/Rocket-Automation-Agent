@@ -95,45 +95,55 @@ export class RocketPage {
 
         await retryAsync(
             async () => {
-                // Check if already logged in by looking for authenticated UI elements
+                // ── Primary check: URL-based ──────────────────────────────────────
+                // If the page did NOT redirect to /login, /signin or /auth,
+                // the saved session is valid. This is reliable immediately after
+                // navigation — no need to wait for React hydration.
+                const currentUrl = this.page.url();
+                const isOnLoginPage = /\/(login|signin|auth|sign-in)/i.test(currentUrl);
+
+                if (isOnLoginPage) {
+                    log.error(`Auth session expired — redirected to: ${currentUrl}`);
+                    throw new Error(
+                        "Google OAuth session expired. " +
+                        "Run 'npx ts-node src/scripts/saveAuthState.ts' to login again."
+                    );
+                }
+
+                // ── Secondary check: wait for any logged-in UI element ────────────
+                // Give the React app up to 20s to hydrate and render the auth UI.
                 const isLoggedIn = await this.page.locator(
                     '[class*="avatar"], [class*="user"], [class*="profile"], ' +
                     'button:has-text("New"), button:has-text("Create"), ' +
                     'img[alt*="avatar" i], img[alt*="profile" i], ' +
                     '[data-testid*="user"], [aria-label*="account" i]'
-                ).first().isVisible({ timeout: 15_000 }).catch(() => false);
+                ).first().isVisible({ timeout: 20_000 }).catch(() => false);
 
                 if (isLoggedIn) {
                     log.info("✓ Already logged in via saved Google session");
                     return;
                 }
 
-                // If not logged in, check if there's a Sign In button (session expired)
-                const signInButton = this.page.locator(
+                // ── Tertiary check: explicit Sign In button present → session gone ──
+                const signInVisible = await this.page.locator(
                     'a:has-text("Sign in"), a:has-text("Login"), ' +
                     'button:has-text("Sign in"), button:has-text("Login"), ' +
                     'button:has-text("Get Started"), a:has-text("Get Started")'
-                );
+                ).first().isVisible({ timeout: 5_000 }).catch(() => false);
 
-                if (await signInButton.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
-                    log.error(
-                        "Auth session expired or missing. " +
-                        "Please re-run: npx ts-node src/scripts/saveAuthState.ts"
-                    );
+                if (signInVisible) {
+                    log.error("Auth session expired — Sign In button is visible");
                     throw new Error(
                         "Google OAuth session expired. " +
                         "Run 'npx ts-node src/scripts/saveAuthState.ts' to login again and save your session."
                     );
                 }
 
-                // Final fallback: wait a bit more and check again
-                await sleep(5000);
-                const retryCheck = await this.page.locator(
-                    '[class*="avatar"], button:has-text("New"), button:has-text("Create")'
-                ).first().isVisible({ timeout: 10_000 }).catch(() => false);
-
-                if (retryCheck) {
-                    log.info("✓ Logged in (detected on retry)");
+                // ── Quaternary: page on rocket.new without a Sign-In button = logged in ──
+                // React may still be loading the avatar. If we're on the right domain
+                // and no login prompt is visible, treat it as authenticated.
+                if (currentUrl.includes('rocket.new')) {
+                    log.info("✓ Logged in (URL check passed, no sign-in prompt detected)");
                     return;
                 }
 
@@ -198,17 +208,53 @@ export class RocketPage {
             }
         );
 
-        // Wait for the intermediate "Build my..." button to appear after analysis
-        // This is a required wizard step on Rocket.new before final generation.
+        // Wait for the intermediate "Build my..." button to appear after analysis.
+        // DOM confirmed: <button><div><div><p>Build my E-commerce store</p>...
+        // The text lives inside a nested <p>, so we target button:has(p) with the text.
         log.info("Waiting for initial analysis to complete and 'Build my...' button to appear...");
         try {
-            const buildMyBtn = this.page.locator('button', { hasText: /build my/i }).first();
-            await buildMyBtn.waitFor({ state: "visible", timeout: 120_000 });
-            await sleep(2000); // Small pause to let the UI fully settle before clicking
-            await buildMyBtn.click();
-            log.info("Clicked 'Build my...' button to start actual generation");
+            // Primary: target the button by the <p> it contains — unambiguous match.
+            // Timeout raised to 3 minutes since Rocket's analysis can take >2 mins.
+            const buildMyBtn = this.page.locator('button:has(p)').filter({ hasText: /build my/i }).first();
+            await buildMyBtn.waitFor({ state: "visible", timeout: 360_000 });
+
+            const btnText = (await buildMyBtn.textContent())?.trim();
+            log.info(`'Build my...' button found: "${btnText}"`);
+
+            await sleep(2000); // let the rightAnimation/arrowAnimate settle
+            // force:true bypasses any intercepting animation overlay
+            await buildMyBtn.click({ force: true });
+            log.info("✅ Clicked 'Build my...' button — actual generation starting");
         } catch {
-            log.warn("Did not find 'Build my...' button within 2 minutes. Assuming generation started automatically.");
+            // Take a debug screenshot so we can see what's on screen
+            await this.takeScreenshot(`${definition.appName}_build_my_btn_missed`);
+            log.warn(
+                "Did not find 'Build my...' button within 3 minutes — screenshot saved. " +
+                "Attempting DOM-level fallback click..."
+            );
+
+            // Fallback: evaluate() finds ANY leaf element whose text matches 'build my'
+            // and clicks the closest <button> ancestor (or the element itself).
+            const clicked = await this.page.evaluate(() => {
+                const all = Array.from(document.querySelectorAll('p, span, div'));
+                const match = all.find(el =>
+                    /build my/i.test(el.textContent?.trim() ?? '')
+                );
+                if (match) {
+                    // Walk up to find the nearest button ancestor
+                    const btn = match.closest('button') ?? match as HTMLElement;
+                    (btn as HTMLElement).click();
+                    return (btn as HTMLElement).textContent?.trim()?.slice(0, 80);
+                }
+                return null;
+            });
+
+            if (clicked) {
+                log.info(`Fallback DOM click succeeded — text: "${clicked}"`);
+                await sleep(2000);
+            } else {
+                log.warn("Fallback also found nothing — assuming generation started automatically.");
+            }
         }
     }
 

@@ -504,6 +504,38 @@ export class AnalysisAgent {
     ): Promise<void> {
         log.info(`Verifying ${rocketPages.length} page endpoints for "${def.appName}"...`);
 
+        // ── Wait for Netlify CDN to propagate the freshly published site ──────
+        // Freshly published Rocket.new apps can take 3-5 minutes to go live.
+        // Strategy: initial 4-minute wait, then reload up to 3 times (30s apart)
+        // until the base URL returns a non-error page, before checking endpoints.
+        log.info(`Waiting 4 minutes for "${def.appName}" to go live on Netlify CDN...`);
+        await publishedPage.goto(publishedUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => { });
+        await publishedPage.waitForTimeout(240_000); // 4 minute initial propagation wait
+
+        log.info('Starting up-to-3 reload retries to confirm site is live...');
+        let siteIsLive = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            await publishedPage.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => { });
+
+            const bodyText = await publishedPage.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+            const isErrorPage = /site not found|page not found|not found on netlify|broken link/i.test(bodyText.slice(0, 2000));
+
+            if (!isErrorPage) {
+                log.info(`✅ Site is live after reload attempt ${attempt}/${3}`);
+                siteIsLive = true;
+                break;
+            }
+
+            log.warn(`⚠ Reload attempt ${attempt}/3 — site still not live, waiting 30s...`);
+            if (attempt < 3) await publishedPage.waitForTimeout(30_000);
+        }
+
+        if (!siteIsLive) {
+            log.warn(`Site did not come up after 4 min + 3 retries — proceeding anyway (pages will be marked MISSING if site is down)`);
+        }
+
+        log.info('Starting per-endpoint verification...');
+
         const foundPages: string[] = [];
         const missingPages: string[] = [];
 
@@ -514,15 +546,42 @@ export class AnalysisAgent {
 
             try {
                 log.info(`  Navigating to: ${fullUrl}`);
-                await publishedPage.goto(fullUrl, {
+                const response = await publishedPage.goto(fullUrl, {
                     waitUntil: 'domcontentloaded',
                     timeout: 15_000,
                 });
-                log.info(`  ✅ Loaded: ${endpoint}`);
+
+                // ── Check 1: HTTP status ──────────────────────────────────────────
+                // Netlify / hosting providers return valid HTML even for 404s,
+                // so `domcontentloaded` always fires. We must check the status code.
+                if (!response || !response.ok()) {
+                    const status = response?.status() ?? 'no response';
+                    log.warn(`  ⚠ HTTP ${status} for ${endpoint} → MISSING`);
+                    missingPages.push(endpoint);
+                    continue;
+                }
+
+                // ── Check 2: Page body error-text scan ───────────────────────────
+                // Some hosts (Netlify, Vercel) serve a branded 404 page with HTTP 200.
+                // Detect those by scanning for known error phrases.
+                const bodyText = await publishedPage.evaluate(
+                    () => document.body?.innerText ?? ''
+                );
+                const isErrorPage = /site not found|page not found|404|not found|broken link/i
+                    .test(bodyText.slice(0, 2000)); // only check first 2000 chars
+
+                if (isErrorPage) {
+                    log.warn(`  ⚠ Error page content detected for ${endpoint} → MISSING`);
+                    missingPages.push(endpoint);
+                    continue;
+                }
+
+                log.info(`  ✅ Loaded OK (HTTP ${response.status()}): ${endpoint}`);
                 foundPages.push(endpoint);
+
             } catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
-                log.warn(`  ⚠ Failed to load ${endpoint}: ${msg}`);
+                log.warn(`  ⚠ Navigation error for ${endpoint}: ${msg} → MISSING`);
                 missingPages.push(endpoint);
             }
         }

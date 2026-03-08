@@ -54,7 +54,7 @@ test.describe("Rocket.new Automation Agent", () => {
 
 // ─── Individual Step Tests ────────────────────────────────────────────────────
 test.describe("Individual Steps", () => {
-    test.setTimeout(10 * 60 * 1000); // 10 minutes per step
+    test.setTimeout(25 * 60 * 1000); // 25 minutes — covers full generation + publish + verify flow
 
     let runner: AutomationRunner;
 
@@ -84,6 +84,10 @@ test.describe("Individual Steps", () => {
 
     // ══ ORIGINAL Step 3 ═══════════════════════════════════════════════════════
     test("Step 3 — Build and Publish Apps on Rocket.new", async () => {
+        // Override to 25 min: prompt entry (~1m) + Rocket analysis (~3m)
+        // + generation (~5m) + publish (~2m) + page verification (~2m) = ~13m per app.
+        // 25 min gives comfortable headroom for 1-2 apps.
+        test.setTimeout(25 * 60 * 1000);
         const definitions = await runner.runBuildOnly();
 
         const publishedCount = definitions.filter((d) => d.publishedUrl).length;
