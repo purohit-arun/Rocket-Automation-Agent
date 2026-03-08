@@ -115,8 +115,8 @@ export class CSVStorageService {
                 this.escapeCSVField(def.pages.join(ARRAY_DELIMITER)),
                 this.escapeCSVField(def.features.join(ARRAY_DELIMITER)),
                 this.escapeCSVField(def.functionalRequirements.join(ARRAY_DELIMITER)),
-                def.publishedUrl || "",
-                def.analysisResult || "",
+                this.escapeCSVField(def.publishedUrl || ""),
+                this.escapeCSVField(def.analysisResult || ""),
             ];
             rows.push(row.join(","));
         }
@@ -190,6 +190,29 @@ export class CSVStorageService {
         definitions[index].publishedUrl = publishedUrl;
         await this.writeAppDefinitions(definitions);
         log.info(`Published URL updated for "${appName}"`);
+    }
+
+    /**
+     * Update the analysis result string for a specific app (by name).
+     * Writes a human-readable FOUND/MISSING summary to the "Analysis Result" column.
+     */
+    async updateAnalysisResult(
+        appName: string,
+        result: string
+    ): Promise<void> {
+        log.info(`Updating analysis result for "${appName}"`);
+
+        const definitions = await this.readAppDefinitions();
+        const index = definitions.findIndex((d) => d.appName === appName);
+
+        if (index === -1) {
+            log.error(`App "${appName}" not found in CSV`);
+            throw new Error(`App "${appName}" not found in CSV`);
+        }
+
+        definitions[index].analysisResult = result;
+        await this.writeAppDefinitions(definitions);
+        log.info(`Analysis result updated for "${appName}"`);
     }
 
     /**

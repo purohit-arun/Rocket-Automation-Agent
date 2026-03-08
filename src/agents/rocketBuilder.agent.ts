@@ -2,8 +2,8 @@ import { AppDefinition } from "../config/config";
 import { CSVStorageService } from "../services/csvStorage.service";
 import { BrowserManager } from "../playwright/browserManager";
 import { RocketPage } from "../playwright/rocketPage";
+import { AnalysisAgent } from "./analysis.agent";
 import { createLogger } from "../utils/logger";
-import { sleep } from "../utils/retry";
 
 const log = createLogger("RocketBuilderAgent");
 
@@ -55,38 +55,59 @@ export class RocketBuilderAgent {
             await rocketPage.navigate();
             await rocketPage.login();
 
+            // Shared analysis agent for page comparison
+            const analysisAgent = new AnalysisAgent(this.csvService);
+
             // Build each app sequentially
             for (let i = 0; i < definitions.length; i++) {
                 const def = definitions[i];
                 log.info(`\n──── Building App ${i + 1}/${definitions.length}: "${def.appName}" ────`);
 
                 try {
-                    // Create the app
-                    await rocketPage.createApp(def);
+                    // ── TEMP: Original production flow (uncomment to restore) ────────────────
+                    // // Create the app
+                    // await rocketPage.createApp(def);
+                    //
+                    // // Wait for generation to complete (~5 mins)
+                    // await rocketPage.waitForGeneration();
+                    //
+                    // // Take a screenshot of the generated app
+                    // await rocketPage.takeScreenshot(`${def.appName}_generated`);
+                    //
+                    // // Publish the app
+                    // await rocketPage.publishApp();
+                    //
+                    // // Extract the published URL
+                    // const publishedUrl = await rocketPage.getPublishedUrl();
+                    // ────────────────────────────────────────────────────────────────────────
 
-                    // Wait for generation to complete
-                    await rocketPage.waitForGeneration();
-
-                    // Take a screenshot of the generated app
-                    await rocketPage.takeScreenshot(`${def.appName}_generated`);
-
-                    // Publish the app
-                    await rocketPage.publishApp();
-
-                    // Extract the published URL
-                    const publishedUrl = await rocketPage.getPublishedUrl();
+                    // TEMP: Use an existing sidebar chat to skip the 5-min generation wait
+                    const publishedUrl = await rocketPage.debugGetUrlFromSidebarChat("ArunClothSphere");
                     def.publishedUrl = publishedUrl;
+                    log.info(`[TEMP] Published URL: ${publishedUrl}`);
+
+                    // TEMP: Extract all page endpoints Rocket generated (from header dropdown)
+                    const rocketPages = await rocketPage.getRocketGeneratedPages();
+                    log.info(`[TEMP] Rocket pages (${rocketPages.length}): ${rocketPages.join(', ')}`);
+
+                    // Open the published app in a new tab in the same browser context
+                    const publishedPage = await rocketPage.openPublishedApp(publishedUrl);
 
                     // Store URL back to CSV
                     await this.csvService.updatePublishedUrl(def.appName, publishedUrl);
 
-                    log.info(`✓ App "${def.appName}" built and published: ${publishedUrl}`);
+                    // Navigate to each Rocket-generated endpoint in the published tab,
+                    // verify DOM loads, then write Found/Missing summary to CSV
+                    await analysisAgent.compareAndWritePageResults(def, rocketPages, publishedUrl, publishedPage);
+
+                    log.info(`✓ App "${def.appName}" processed. Published: ${publishedUrl}`);
 
                     // Navigate back to home for next app
-                    if (i < definitions.length - 1) {
-                        await rocketPage.navigate();
-                        await sleep(2000);
-                    }
+                    // ── TEMP: skip navigate-back since we are reusing a single sidebar chat ──
+                    // if (i < definitions.length - 1) {
+                    //     await rocketPage.navigate();
+                    //     await sleep(2000);
+                    // }
                 } catch (error) {
                     const errorMsg = error instanceof Error ? error.message : String(error);
                     log.error(`✗ Failed to build app "${def.appName}": ${errorMsg}`);

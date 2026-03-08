@@ -486,6 +486,62 @@ export class AnalysisAgent {
     }
 
     /**
+     * For each endpoint extracted from the Rocket header dropdown, navigate to
+     * `publishedUrl + endpoint` in the already-open published-app tab and verify
+     * that the page's DOM content actually loads. Then write a formatted
+     * Found / Missing summary into the CSV "Analysis Result" column (single cell).
+     *
+     * @param def           - AppDefinition from CSV (used for app name)
+     * @param rocketPages   - Endpoints from the Rocket header dropdown (e.g. ["/homepage", "/cart"])
+     * @param publishedUrl  - Base published URL (e.g. "https://xxx.builtwithrocket.new")
+     * @param publishedPage - The already-open browser tab pointing at the published app
+     */
+    async compareAndWritePageResults(
+        def: AppDefinition,
+        rocketPages: string[],
+        publishedUrl: string,
+        publishedPage: import('playwright').Page
+    ): Promise<void> {
+        log.info(`Verifying ${rocketPages.length} page endpoints for "${def.appName}"...`);
+
+        const foundPages: string[] = [];
+        const missingPages: string[] = [];
+
+        for (const endpoint of rocketPages) {
+            // Ensure endpoint starts with / and build the full URL
+            const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+            const fullUrl = `${publishedUrl.replace(/\/+$/, '')}${normalizedEndpoint}`;
+
+            try {
+                log.info(`  Navigating to: ${fullUrl}`);
+                await publishedPage.goto(fullUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 15_000,
+                });
+                log.info(`  ✅ Loaded: ${endpoint}`);
+                foundPages.push(endpoint);
+            } catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                log.warn(`  ⚠ Failed to load ${endpoint}: ${msg}`);
+                missingPages.push(endpoint);
+            }
+        }
+
+        // Build a single formatted string for the CSV cell.
+        // A newline inside a quoted CSV field renders as a line-break in Excel.
+        const foundStr = foundPages.length ? foundPages.join(', ') : 'none';
+        const missingStr = missingPages.length ? missingPages.join(', ') : 'none';
+        const summary = `Found Pages: ${foundStr}\nMissing Pages: ${missingStr}`;
+
+        log.info(`Page verification complete for "${def.appName}":`);
+        log.info(`  Found   (${foundPages.length}): ${foundStr}`);
+        log.info(`  Missing (${missingPages.length}): ${missingStr}`);
+
+        await this.csvService.updateAnalysisResult(def.appName, summary);
+        log.info(`✅ Analysis Result written to CSV for "${def.appName}"`);
+    }
+
+    /**
      * Print a summary table of analysis results.
      */
     private printSummary(results: AnalysisResult[]): void {

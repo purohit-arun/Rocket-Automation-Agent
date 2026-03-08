@@ -59,6 +59,11 @@ export class RocketPage {
         );
     }
 
+    // Rocket page-switcher dropdown (React-Select in the header showing current page e.g. "/homepage")
+    private get rocketPageDropdown(): Locator {
+        return this.page.locator('.project_dropdown__control');
+    }
+
 
     /**
      * Navigate to the Rocket.new homepage.
@@ -390,6 +395,67 @@ export class RocketPage {
                 label: "Extract Published URL",
             }
         );
+    }
+
+    /**
+     * Extract all page endpoints that Rocket generated for this app.
+     *
+     * The header contains a React-Select dropdown (`project_dropdown__control`) that
+     * lists every page Rocket built (e.g. /homepage, /cart, /admin/login).
+     * Because React-Select collapses on ANY blur event, we cannot use Playwright
+     * locators to iterate the options after clicking — they disappear before Playwright
+     * can read them.  Instead we:
+     *   1. Click the control to open it.
+     *   2. Call `page.evaluate()` which runs synchronously inside the DOM with no blur.
+     *   3. Press Escape to close cleanly without triggering navigation.
+     */
+    async getRocketGeneratedPages(): Promise<string[]> {
+        log.info("Extracting Rocket-generated page endpoints from header dropdown...");
+
+        try {
+            // 1. Wait for the dropdown control to be present
+            await this.rocketPageDropdown.waitFor({ state: "visible", timeout: 15_000 });
+
+            // 2. Click it to open the options list
+            await this.rocketPageDropdown.click();
+            await this.page.waitForTimeout(600); // small pause for React-Select to render options
+
+            // 3. Read all options via DOM evaluation — no blur risk
+            const pages = await this.page.evaluate(() => {
+                const options = document.querySelectorAll('[class*="project_dropdown__option"]');
+                return Array.from(options).map(el => el.textContent?.trim() ?? '');
+            });
+
+            // 4. Close the dropdown without navigating
+            await this.page.keyboard.press('Escape');
+            await this.page.waitForTimeout(300);
+
+            // Keep only entries that look like URL paths (start with /)
+            const filtered = pages.filter(p => p.startsWith('/'));
+            log.info(`✅ Found ${filtered.length} Rocket-generated pages: ${filtered.join(', ')}`);
+            return filtered;
+        } catch (error) {
+            log.warn(`Could not extract Rocket pages from dropdown: ${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        }
+    }
+
+    /**
+     * Open the published application URL in a new tab within the same browser context.
+     * Returns the new Page object so the caller can interact with or close it.
+     */
+    async openPublishedApp(publishedUrl: string): Promise<import('playwright').Page> {
+        log.info(`Opening published app in new tab: ${publishedUrl}`);
+        const newPage = await this.page.context().newPage();
+        await newPage.goto(publishedUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 60_000,
+        });
+        await newPage.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {
+            log.warn('Network idle timeout on published app tab — proceeding anyway');
+        });
+        log.info(`✅ Published app loaded in new tab`);
+        return newPage;
     }
 
     /**
