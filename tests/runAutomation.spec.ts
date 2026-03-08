@@ -5,19 +5,25 @@ import { AutomationInput } from "../src/config/config";
 /**
  * Rocket.new Automation Agent — Playwright Test Entrypoint
  *
- * Run with: npx playwright test tests/runAutomation.spec.ts
+ * DO NOT run directly. Use the interactive launcher instead:
+ *   node run.js
  *
- * Configure the input parameters below or override via environment variables:
- *   NUM_APPS=3 TECHNOLOGY=React USE_CASE="Web App" APP_TYPE="Ecommerce Clothing Store" npx playwright test
+ * run.js prompts for the 4 inputs, then launches Playwright
+ * with those values passed as environment variables.
  */
 
-// ─── Input Configuration ──────────────────────────────────────────────────────
-const automationInput: AutomationInput = {
-    numberOfApps: parseInt(process.env.NUM_APPS || "1", 10),
-    technology: process.env.TECHNOLOGY || "React",
-    useCase: process.env.USE_CASE || "Web App",
-    type: process.env.APP_TYPE || "Ecommerce Clothing Store",
-};
+function collectUserInput(): AutomationInput {
+    // Values come from env vars injected by run.js (which prompted the user)
+    return {
+        numberOfApps: parseInt(process.env.NUM_APPS || "1", 10),
+        useCase: process.env.USE_CASE || "Web App",
+        technology: process.env.TECHNOLOGY || "NextJS / React",
+        type: process.env.APP_TYPE || "E-commerce",
+    };
+}
+
+// ─── Collect Input Once (synchronously) Before All Tests Run ─────────────────
+const automationInput: AutomationInput = collectUserInput();
 
 // ─── Full Pipeline Test ───────────────────────────────────────────────────────
 test.describe("Rocket.new Automation Agent", () => {

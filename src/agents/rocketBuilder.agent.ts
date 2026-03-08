@@ -75,8 +75,10 @@ export class RocketBuilderAgent {
                     // Wait for Rocket.new to finish generating (~5 mins)
                     await rocketPage.waitForGeneration();
 
-                    // Take a screenshot of the generated app
-                    await rocketPage.takeScreenshot(`${def.appName}_generated`);
+                    // Take a screenshot of the generated app (ignore if page closed)
+                    await rocketPage.takeScreenshot(`${def.appName}_generated`).catch((e) =>
+                        log.warn(`Could not save generated screenshot: ${e.message}`)
+                    );
 
                     // Publish the app (click Launch → inner Launch button)
                     await rocketPage.publishApp();
@@ -101,7 +103,7 @@ export class RocketBuilderAgent {
                     // Open the published app in a new tab in the same browser context
                     const publishedPage = await rocketPage.openPublishedApp(publishedUrl);
 
-                    // Store URL back to CSV
+                    // Store URL back to CSV — close Excel/other apps before this runs!
                     await this.csvService.updatePublishedUrl(def.appName, publishedUrl);
 
                     // Navigate to each Rocket-generated endpoint in the published tab,
@@ -119,18 +121,29 @@ export class RocketBuilderAgent {
                     const errorMsg = error instanceof Error ? error.message : String(error);
                     log.error(`✗ Failed to build app "${def.appName}": ${errorMsg}`);
 
-                    // Take error screenshot
-                    await rocketPage.takeScreenshot(`${def.appName}_error`);
+                    // Check if the page/browser is still open before attempting a screenshot
+                    const pageStillOpen = await rocketPage.page.evaluate(() => true).catch(() => false);
 
-                    // Continue with next app
-                    try {
-                        await rocketPage.navigate();
-                    } catch {
-                        log.warn("Failed to navigate back — reopening page");
-                        const newPage = await this.browserManager.getContext()!.newPage();
-                        rocketPage = new RocketPage(newPage);
-                        await rocketPage.navigate();
-                        await rocketPage.login();
+                    if (pageStillOpen) {
+                        // Take error screenshot — page is still alive
+                        await rocketPage.takeScreenshot(`${def.appName}_error`).catch((e) =>
+                            log.warn(`Could not save error screenshot: ${e.message}`)
+                        );
+
+                        // Only navigate back if there are more apps to process
+                        if (i < definitions.length - 1) {
+                            try {
+                                await rocketPage.navigate();
+                            } catch {
+                                log.warn("Failed to navigate back — reopening page");
+                                const newPage = await this.browserManager.getContext()!.newPage();
+                                rocketPage = new RocketPage(newPage);
+                                await rocketPage.navigate();
+                                await rocketPage.login();
+                            }
+                        }
+                    } else {
+                        log.warn(`Browser/page was closed externally for "${def.appName}" — skipping recovery navigation`);
                     }
                 }
             }

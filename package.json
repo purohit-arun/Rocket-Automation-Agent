@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Playwright automation agent for Rocket.new — generates, publishes, and analyzes applications automatically.",
   "scripts": {
+    "start": "node run.js",
     "build": "tsc",
     "test": "npx playwright test",
     "automation": "npx playwright test tests/runAutomation.spec.ts",
