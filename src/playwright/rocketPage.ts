@@ -413,7 +413,14 @@ export class RocketPage {
         log.info("Extracting Rocket-generated page endpoints from header dropdown...");
 
         try {
-            // 1. Wait for the dropdown control to be present
+            // 0. The Launch dropdown may still be open from the URL extraction step.
+            //    Press Escape to dismiss it cleanly, then wait 3s for the UI to settle
+            //    before attempting to click the React page-switcher dropdown.
+            log.info("Pressing Escape to dismiss any open dropdown before clicking page-switcher...");
+            await this.page.keyboard.press('Escape');
+            await this.page.waitForTimeout(3000);
+
+            // 1. Wait for the project dropdown control to be visible
             await this.rocketPageDropdown.waitFor({ state: "visible", timeout: 15_000 });
 
             // 2. Click it to open the options list
