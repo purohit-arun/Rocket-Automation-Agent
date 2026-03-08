@@ -66,34 +66,24 @@ export class RocketBuilderAgent {
 
                 try {
                     // ═══════════════════════════════════════════════════════════════════
-                    // PRODUCTION FLOW — active
+                    // PRODUCTION FLOW — commented out (using sidebar shortcut instead)
                     // ═══════════════════════════════════════════════════════════════════
-
-                    // Create the app from definition
-                    await rocketPage.createApp(def);
-
-                    // Wait for Rocket.new to finish generating (~5 mins)
-                    await rocketPage.waitForGeneration();
-
-                    // Take a screenshot of the generated app (ignore if page closed)
-                    await rocketPage.takeScreenshot(`${def.appName}_generated`).catch((e) =>
-                        log.warn(`Could not save generated screenshot: ${e.message}`)
-                    );
-
-                    // Publish the app (click Launch → inner Launch button)
-                    await rocketPage.publishApp();
-
-                    // Extract the published URL from the launch dropdown
-                    const publishedUrl = await rocketPage.getPublishedUrl();
-                    def.publishedUrl = publishedUrl;
-
-                    // ═══════════════════════════════════════════════════════════════════
-                    // ── TEMP DEBUG: sidebar shortcut (uncomment to skip generation) ──
-                    // ── Comment the PRODUCTION FLOW above and uncomment this block  ──
-                    // ═══════════════════════════════════════════════════════════════════
-                    // const publishedUrl = await rocketPage.debugGetUrlFromSidebarChat("ArunClothSphere");
+                    // await rocketPage.createApp(def);
+                    // await rocketPage.waitForGeneration();
+                    // await rocketPage.takeScreenshot(`${def.appName}_generated`).catch((e) =>
+                    //     log.warn(`Could not save generated screenshot: ${e.message}`)
+                    // );
+                    // await rocketPage.publishApp();
+                    // const publishedUrl = await rocketPage.getPublishedUrl();
                     // def.publishedUrl = publishedUrl;
-                    // log.info(`[TEMP] Published URL: ${publishedUrl}`);
+                    // ═══════════════════════════════════════════════════════════════════
+
+                    // ═══════════════════════════════════════════════════════════════════
+                    // SIDEBAR SHORTCUT — pick existing app instead of generating
+                    // ═══════════════════════════════════════════════════════════════════
+                    const publishedUrl = await rocketPage.debugGetUrlFromSidebarChat("ArunClothSphere");
+                    def.publishedUrl = publishedUrl;
+                    log.info(`Published URL from sidebar: ${publishedUrl}`);
                     // ═══════════════════════════════════════════════════════════════════
 
                     // Extract all page endpoints Rocket generated (from header dropdown)
