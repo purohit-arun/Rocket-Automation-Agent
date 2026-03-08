@@ -96,15 +96,16 @@ export class RocketBuilderAgent {
                     // log.info(`[TEMP] Published URL: ${publishedUrl}`);
                     // ═══════════════════════════════════════════════════════════════════
 
+                    // Store URL to CSV IMMEDIATELY — before any subsequent steps that could fail
+                    await this.csvService.updatePublishedUrl(def.appName, publishedUrl);
+                    log.info(`Published URL saved to CSV for "${def.appName}": ${publishedUrl}`);
+
                     // Extract all page endpoints Rocket generated (from header dropdown)
                     const rocketPages = await rocketPage.getRocketGeneratedPages();
                     log.info(`Rocket pages (${rocketPages.length}): ${rocketPages.join(', ')}`);
 
                     // Open the published app in a new tab in the same browser context
                     const publishedPage = await rocketPage.openPublishedApp(publishedUrl);
-
-                    // Store URL back to CSV — close Excel/other apps before this runs!
-                    await this.csvService.updatePublishedUrl(def.appName, publishedUrl);
 
                     // Navigate to each Rocket-generated endpoint in the published tab,
                     // verify DOM loads, then write Found/Missing summary to CSV
